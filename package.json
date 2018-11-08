@@ -1,0 +1,17 @@
+{
+	"name": "rbx-datastore2",
+	"version": "1.0.0",
+	"description": "a roblox-ts package of Kampfkarren's Datastore2",
+	"main": "Datastore2.lua",
+	"types": "Datastore2.d.ts",
+	"scripts": {},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"devDependencies": {
+		"rbx-types": "^1.0.72"
+	},
+	"peerDependencies": {
+		"rbx-types": "^1.0.72"
+	}
+}

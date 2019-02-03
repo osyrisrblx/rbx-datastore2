@@ -125,6 +125,14 @@ function Verifier.warnIfInvalid(input)
 	return isValid
 end
 
+local function clone(value)
+	if typeof(value) == "table" then
+		return table.deep(value)
+	else
+		return value
+	end
+end
+
 --DataStore object
 local DataStore = {}
 
@@ -136,25 +144,47 @@ function DataStore:Debug(...)
 end
 
 function DataStore:_GetRaw()
+	if not self.getQueue then
+		self.getQueue = {}
+	end
+
+	if self.getting then
+		self:Debug("A _GetRaw is already in motion, just wait until it's done")
+		local event = Instance.new("BindableEvent")
+		self.getQueue[#self.getQueue + 1] = event
+		event.Event:wait()
+		self:Debug("Aaand we're back")
+		return
+	end
+
+	self.getting = true
+
 	local mostRecentKeyPage = self.orderedDataStore:GetSortedAsync(false, 1):GetCurrentPage()[1]
 
 	if mostRecentKeyPage then
 		local recentKey = mostRecentKeyPage.value
 		self:Debug("most recent key", mostRecentKeyPage)
-
 		self.value = self.dataStore:GetAsync(recentKey)
 	else
 		self:Debug("no recent key")
-
 		self.value = nil
 	end
 
+	for _, waiting in pairs(self.getQueue) do
+		self:Debug("resuming in queue", waiting)
+		waiting:Fire()
+	end
+
+	self.getQueue = {}
 	self.haveValue = true
+	self.getting = false
 end
 
-function DataStore:_Update()
-	for _,callback in pairs(self.callbacks) do
-		callback(self.value, self)
+function DataStore:_Update(dontCallOnUpdate)
+	if not dontCallOnUpdate then
+		for _,callback in pairs(self.callbacks) do
+			callback(self.value, self)
+		end
 	end
 
 	self.haveValue = true
@@ -216,9 +246,7 @@ function DataStore:Get(defaultValue, dontAttemptGet)
 		value = self.value
 	end
 
-	if typeof(value) == "table" then
-		value = table.deep(value)
-	end
+	value = clone(value)
 
 	self.value = value
 
@@ -272,14 +300,9 @@ end
 	The value
 	</parameter>
 **--]]
-function DataStore:Set(value)
-	if typeof(value) == "table" then
-		self.value = table.deep(value)
-	else
-		self.value = value
-	end
-
-	self:_Update()
+function DataStore:Set(value, _dontCallOnUpdate)
+	self.value = clone(value)
+	self:_Update(_dontCallOnUpdate)
 end
 
 --[[**
@@ -349,7 +372,7 @@ end
 	</parameter>
 **--]]
 function DataStore:BeforeSave(modifier)
-	table.insert(self.beforeSave, modifier)
+	self.beforeSave = modifier
 end
 
 --[[**
@@ -431,10 +454,10 @@ function DataStore:Save()
 	end
 
 	if self.value ~= nil then
-		local save = self.value
+		local save = clone(self.value)
 
-		for _,beforeSave in pairs(self.beforeSave) do
-			local success, newSave = pcall(beforeSave, save, self)
+		if self.beforeSave then
+			local success, newSave = pcall(self.beforeSave, save, self)
 
 			if success then
 				save = newSave
@@ -516,12 +539,32 @@ end
 local CombinedDataStore = {}
 
 do
-	function CombinedDataStore:Get(defaultValue, ...)
-		local tableResult = self.combinedStore:GetTable({
-			[self.combinedName] = defaultValue
-		}, ...)
+	function CombinedDataStore:BeforeInitialGet(modifier)
+		self.combinedBeforeInitialGet = modifier
+	end
 
-		return (tableResult or {})[self.combinedName]
+	function CombinedDataStore:BeforeSave(modifier)
+		self.combinedBeforeSave = modifier
+	end
+
+	function CombinedDataStore:Get(defaultValue, dontAttemptGet)
+		local tableResult = self.combinedStore:Get({})
+		local tableValue = tableResult[self.combinedName]
+
+		if not dontAttemptGet then
+			if tableValue == nil then
+				tableValue = defaultValue
+			else
+				if self.combinedBeforeInitialGet and not self.combinedInitialGot then
+					self.combinedInitialGot = true
+					tableValue = self.combinedBeforeInitialGet(tableValue)
+				end
+			end
+		end
+
+		tableResult[self.combinedName] = clone(tableValue)
+		self.combinedStore:Set(tableResult, true)
+		return tableValue
 	end
 
 	function CombinedDataStore:Set(value)
@@ -531,18 +574,9 @@ do
 		self:_Update()
 	end
 
-	local function beforeInitGetOrSave(name)
-		CombinedDataStore[name] = function(self, callback)
-			self.combinedStore[name](self, function(value)
-				local new = callback(value[self.combinedName], self)
-				value[self.combinedName] = new
-				return value
-			end)
-		end
+	function CombinedDataStore:Update(updateFunc)
+		self:Set(updateFunc(self:Get()))
 	end
-
-	beforeInitGetOrSave("BeforeInitialGet")
-	beforeInitGetOrSave("BeforeSave")
 
 	function CombinedDataStore:OnUpdate(callback)
 		self.combinedStore:OnUpdate(function(value)
@@ -586,11 +620,32 @@ function DataStore2.Combine(mainKey, ...)
 	end
 end
 
+function DataStore2.ClearCache()
+	DataStoreCache = {}
+end
+
 function DataStore2:__call(dataStoreName, player)
 	if DataStoreCache[player] and DataStoreCache[player][dataStoreName] then
 		return DataStoreCache[player][dataStoreName]
 	elseif combinedDataStoreInfo[dataStoreName] then
 		local dataStore = DataStore2(combinedDataStoreInfo[dataStoreName], player)
+
+		dataStore:BeforeSave(function(combinedData)
+			for key in pairs(combinedData) do
+				if combinedDataStoreInfo[key] then
+					local combinedStore = DataStore2(key, player)
+					local value = combinedStore:Get(nil, true)
+					if value ~= nil then
+						if combinedStore.combinedBeforeSave then
+							value = combinedStore.combinedBeforeSave(clone(value))
+						end
+						combinedData[key] = value
+					end
+				end
+			end
+
+			return combinedData
+		end)
 
 		local combinedStore = setmetatable({
 			combinedName = dataStoreName,
@@ -617,7 +672,6 @@ function DataStore2:__call(dataStoreName, player)
 	dataStore.name = dataStoreName
 	dataStore.player = player
 	dataStore.callbacks = {}
-	dataStore.beforeSave = {}
 	dataStore.beforeInitialGet = {}
 	dataStore.afterSave = {}
 	dataStore.bindToClose = {}

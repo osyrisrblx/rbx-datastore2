@@ -49,53 +49,53 @@ local Debug = false
 local Verifier = {}
 
 function Verifier.typeValid(data)
-	return type(data) ~= 'userdata', typeof(data)
+	return type(data) ~= "userdata", typeof(data)
 end
 
 function Verifier.scanValidity(tbl, passed, path)
-	if type(tbl) ~= 'table' then
+	if type(tbl) ~= "table" then
 		return Verifier.scanValidity({input = tbl}, {}, {})
 	end
-	passed, path = passed or {}, path or {'input'}
+	passed, path = passed or {}, path or {"input"}
 	passed[tbl] = true
 	local tblType
 	do
 		local key, value = next(tbl)
-		if type(key) == 'number' then
-			tblType = 'Array'
+		if type(key) == "number" then
+			tblType = "Array"
 		else
-			tblType = 'Dictionary'
+			tblType = "Dictionary"
 		end
 	end
 	local last = 0
 	for key, value in next, tbl do
 		path[#path + 1] = tostring(key)
-		if type(key) == 'number' then
-			if tblType == 'Dictionary' then
-				return false, path, 'Mixed Array/Dictionary'
+		if type(key) == "number" then
+			if tblType == "Dictionary" then
+				return false, path, "Mixed Array/Dictionary"
 			elseif key%1 ~= 0 then  -- if not an integer
-				return false, path, 'Non-integer index'
+				return false, path, "Non-integer index"
 			elseif key == math.huge or key == -math.huge then
-				return false, path, '(-)Infinity index'
+				return false, path, "(-)Infinity index"
 			end
-		elseif type(key) ~= 'string' then
-			return false, path, 'Non-string key', typeof(key)
-		elseif tblType == 'Array' then
-			return false, path, 'Mixed Array/Dictionary'
+		elseif type(key) ~= "string" then
+			return false, path, "Non-string key", typeof(key)
+		elseif tblType == "Array" then
+			return false, path, "Mixed Array/Dictionary"
 		end
-		if tblType == 'Array' then
+		if tblType == "Array" then
 			if last ~= key - 1 then
-				return false, path, 'Array with non-sequential indexes'
+				return false, path, "Array with non-sequential indexes"
 			end
 			last = key
 		end
 		local isTypeValid, valueType = Verifier.typeValid(value)
 		if not isTypeValid then
-			return false, path, 'Invalid type', valueType
+			return false, path, "Invalid type", valueType
 		end
-		if type(value) == 'table' then
+		if type(value) == "table" then
 			if passed[value] then
-				return false, path, 'Cyclic'
+				return false, path, "Cyclic"
 			end
 			local isValid, keyPath, reason, extra = Verifier.scanValidity(value, passed, path)
 			if not isValid then
@@ -109,16 +109,16 @@ function Verifier.scanValidity(tbl, passed, path)
 end
 
 function Verifier.getStringPath(path)
-	return table.concat(path, '.')
+	return table.concat(path, ".")
 end
 
 function Verifier.warnIfInvalid(input)
 	local isValid, keyPath, reason, extra = Verifier.scanValidity(input)
 	if not isValid then
 		if extra then
-			warn('Invalid at '..Verifier.getStringPath(keyPath)..' because: '..reason..' ('..tostring(extra)..')')
+			warn("Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason.." ("..tostring(extra)..")")
 		else
-			warn('Invalid at '..Verifier.getStringPath(keyPath)..' because: '..reason)
+			warn("Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason)
 		end
 	end
 
@@ -159,12 +159,27 @@ function DataStore:_GetRaw()
 
 	self.getting = true
 
-	local mostRecentKeyPage = self.orderedDataStore:GetSortedAsync(false, 1):GetCurrentPage()[1]
+	local success, mostRecentKeyPage = pcall(function()
+		return self.orderedDataStore:GetSortedAsync(false, 1):GetCurrentPage()[1]
+	end)
+
+	if not success then
+		self.getting = false
+		error(mostRecentKeyPage)
+	end
 
 	if mostRecentKeyPage then
 		local recentKey = mostRecentKeyPage.value
 		self:Debug("most recent key", mostRecentKeyPage)
-		self.value = self.dataStore:GetAsync(recentKey)
+		self.mostRecentKey = recentKey
+		local success, value = pcall(function()
+			return self.dataStore:GetAsync(recentKey)
+		end)
+		if not success then
+			self.getting = false
+			error(value)
+		end
+		self.value = value
 	else
 		self:Debug("no recent key")
 		self.value = nil
@@ -277,7 +292,7 @@ function DataStore:GetTable(default, ...)
 
 	assert(typeof(result) == "table", ":GetTable was used when the value in the data store isn't a table.")
 
-	for defaultKey,defaultValue in pairs(default) do
+	for defaultKey, defaultValue in pairs(default) do
 		if result[defaultKey] == nil then
 			result[defaultKey] = defaultValue
 			changed = true
@@ -469,11 +484,12 @@ function DataStore:Save()
 
 		if not Verifier.warnIfInvalid(save) then return warn("Invalid data while saving") end
 
-		local key = os.time()
+		local key = (self.mostRecentKey or 0) + 1
 		self.dataStore:SetAsync(key, save)
 		self.orderedDataStore:SetAsync(key, key)
+		self.mostRecentKey = key
 
-		for _,afterSave in pairs(self.afterSave) do
+		for _, afterSave in pairs(self.afterSave) do
 			local success, err = pcall(afterSave, save, self)
 
 			if not success then
@@ -556,36 +572,49 @@ do
 				tableValue = defaultValue
 			else
 				if self.combinedBeforeInitialGet and not self.combinedInitialGot then
-					self.combinedInitialGot = true
 					tableValue = self.combinedBeforeInitialGet(tableValue)
 				end
 			end
 		end
 
+		self.combinedInitialGot = true
 		tableResult[self.combinedName] = clone(tableValue)
 		self.combinedStore:Set(tableResult, true)
 		return tableValue
 	end
 
-	function CombinedDataStore:Set(value)
+	function CombinedDataStore:Set(value, dontCallOnUpdate)
 		local tableResult = self.combinedStore:GetTable({})
 		tableResult[self.combinedName] = value
-		self.combinedStore:Set(tableResult)
-		self:_Update()
+		self.combinedStore:Set(tableResult, dontCallOnUpdate)
+		self:_Update(dontCallOnUpdate)
 	end
 
 	function CombinedDataStore:Update(updateFunc)
 		self:Set(updateFunc(self:Get()))
+		self:_Update()
 	end
 
 	function CombinedDataStore:OnUpdate(callback)
-		self.combinedStore:OnUpdate(function(value)
-			if value[self.combinedName] == nil then
-				return
-			end
+		if not self.onUpdateCallbacks then
+			self.onUpdateCallbacks = { callback }
+		else
+			self.onUpdateCallbacks[#self.onUpdateCallbacks + 1] = callback
+		end
+	end
 
-			callback(value[self.combinedName], self)
-		end)
+	function CombinedDataStore:_Update(dontCallOnUpdate)
+		if not dontCallOnUpdate then
+			for _, callback in pairs(self.onUpdateCallbacks or {}) do
+				callback(self:Get(), self)
+			end
+		end
+
+		self.combinedStore:_Update(true)
+	end
+
+	function CombinedDataStore:SetBackup(retries)
+		self.combinedStore:SetBackup(retries)
 	end
 end
 
@@ -615,7 +644,7 @@ local combinedDataStoreInfo = {}
 	</parameter>
 **--]]
 function DataStore2.Combine(mainKey, ...)
-	for _,name in pairs({...}) do
+	for _, name in pairs({...}) do
 		combinedDataStoreInfo[name] = mainKey
 	end
 end
@@ -625,6 +654,7 @@ function DataStore2.ClearCache()
 end
 
 function DataStore2:__call(dataStoreName, player)
+	assert(typeof(dataStoreName) == "string" and typeof(player) == "Instance", ("DataStore2() API call expected {string dataStoreName, Instance player}, got {%s, %s}"):format(typeof(dataStoreName), typeof(player)))
 	if DataStoreCache[player] and DataStoreCache[player][dataStoreName] then
 		return DataStoreCache[player][dataStoreName]
 	elseif combinedDataStoreInfo[dataStoreName] then
@@ -687,7 +717,7 @@ function DataStore2:__call(dataStoreName, player)
 
 		local value = dataStore:Get(nil, true)
 
-		for _,bindToClose in pairs(dataStore.bindToClose) do
+		for _, bindToClose in pairs(dataStore.bindToClose) do
 			bindToClose(player, value)
 		end
 	end)
@@ -709,12 +739,6 @@ function DataStore2:__call(dataStoreName, player)
 	end
 
 	DataStoreCache[player][dataStoreName] = dataStore
-
-	spawn(function()
-		while RegularSave and wait(RegularSaveNum) do
-			dataStore:Save()
-		end
-	end)
 
 	return dataStore
 end

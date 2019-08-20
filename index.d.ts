@@ -88,6 +88,11 @@ interface DataStore2<T> {
 	Save(): void;
 
 	/**
+	 * Asynchronously saves the data to the data store.
+	 */
+	SaveAsync(): void;
+
+	/**
 	 * Add a function to be called before the game closes. Fired with the player and value of the data store.
 	 * @param callback The callback function.
 	 */

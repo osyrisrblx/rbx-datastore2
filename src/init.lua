@@ -12,6 +12,7 @@
 	- BeforeInitialGet(modifier)
 	- BeforeSave(modifier)
 	- Save()
+	- SaveAsync()
 	- OnUpdate(callback)
 	- BindToClose(callback)
 
@@ -26,108 +27,22 @@
 	coinStore:Get()
 --]]
 
---[[
-	berezaa's method of saving data (from the dev forum):
-
-	What I do and this might seem a little over-the-top but it's fine as long as you're not using datastores excessively elsewhere is have a datastore and an ordereddatastore for each player. When you perform a save, add a key (can be anything) with the value of os.time() to the ordereddatastore and save a key with the os.time() and the value of the player's data to the regular datastore. Then, when loading data, get the highest number from the ordered data store (most recent save) and load the data with that as a key.
-
-	Ever since I implemented this, pretty much no one has ever lost data. There's no caches to worry about either because you're never overriding any keys. Plus, it has the added benefit of allowing you to restore lost data, since every save doubles as a backup which can be easily found with the ordereddatastore
-
-	edit: while there's no official comment on this, many developers including myself have noticed really bad cache times and issues with using the same datastore keys to save data across multiple places in the same game. With this method, data is almost always instantly accessible immediately after a player teleports, making it useful for multi-place games.
---]]
-
 --Required components
-local Players = game:GetService("Players")
 local DataStoreService = game:GetService("DataStoreService")
-local table = require(script.table) --If you're using this from GitHub, this is the table in the boilerplate folder.
-local RegularSave = false
-local RegularSaveNum = 300
-local SaveInStudioObject = game:GetService("ServerStorage"):FindFirstChild("SaveInStudio")
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ServerStorage = game:GetService("ServerStorage")
+
+local SavingMethods = require(script.SavingMethods)
+local TableUtil = require(script.TableUtil)
+local Verifier = require(script.Verifier)
+
+local SaveInStudioObject = ServerStorage:FindFirstChild("SaveInStudio")
 local SaveInStudio = SaveInStudioObject and SaveInStudioObject.Value
-local Debug = false
-
-local Verifier = {}
-
-function Verifier.typeValid(data)
-	return type(data) ~= "userdata", typeof(data)
-end
-
-function Verifier.scanValidity(tbl, passed, path)
-	if type(tbl) ~= "table" then
-		return Verifier.scanValidity({input = tbl}, {}, {})
-	end
-	passed, path = passed or {}, path or {"input"}
-	passed[tbl] = true
-	local tblType
-	do
-		local key, value = next(tbl)
-		if type(key) == "number" then
-			tblType = "Array"
-		else
-			tblType = "Dictionary"
-		end
-	end
-	local last = 0
-	for key, value in next, tbl do
-		path[#path + 1] = tostring(key)
-		if type(key) == "number" then
-			if tblType == "Dictionary" then
-				return false, path, "Mixed Array/Dictionary"
-			elseif key%1 ~= 0 then  -- if not an integer
-				return false, path, "Non-integer index"
-			elseif key == math.huge or key == -math.huge then
-				return false, path, "(-)Infinity index"
-			end
-		elseif type(key) ~= "string" then
-			return false, path, "Non-string key", typeof(key)
-		elseif tblType == "Array" then
-			return false, path, "Mixed Array/Dictionary"
-		end
-		if tblType == "Array" then
-			if last ~= key - 1 then
-				return false, path, "Array with non-sequential indexes"
-			end
-			last = key
-		end
-		local isTypeValid, valueType = Verifier.typeValid(value)
-		if not isTypeValid then
-			return false, path, "Invalid type", valueType
-		end
-		if type(value) == "table" then
-			if passed[value] then
-				return false, path, "Cyclic"
-			end
-			local isValid, keyPath, reason, extra = Verifier.scanValidity(value, passed, path)
-			if not isValid then
-				return isValid, keyPath, reason, extra
-			end
-		end
-		path[#path] = nil
-	end
-	passed[tbl] = nil
-	return true
-end
-
-function Verifier.getStringPath(path)
-	return table.concat(path, ".")
-end
-
-function Verifier.warnIfInvalid(input)
-	local isValid, keyPath, reason, extra = Verifier.scanValidity(input)
-	if not isValid then
-		if extra then
-			warn("Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason.." ("..tostring(extra)..")")
-		else
-			warn("Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason)
-		end
-	end
-
-	return isValid
-end
 
 local function clone(value)
 	if typeof(value) == "table" then
-		return table.deep(value)
+		return TableUtil.clone(value)
 	else
 		return value
 	end
@@ -138,61 +53,38 @@ local DataStore = {}
 
 --Internal functions
 function DataStore:Debug(...)
-	if Debug then
+	if self.debug then
 		print(...)
 	end
 end
 
 function DataStore:_GetRaw()
 	if not self.getQueue then
-		self.getQueue = {}
+		self.getQueue = Instance.new("BindableEvent")
 	end
 
 	if self.getting then
 		self:Debug("A _GetRaw is already in motion, just wait until it's done")
-		local event = Instance.new("BindableEvent")
-		self.getQueue[#self.getQueue + 1] = event
-		event.Event:wait()
+		self.getQueue.Event:wait()
 		self:Debug("Aaand we're back")
 		return
 	end
 
 	self.getting = true
 
-	local success, mostRecentKeyPage = pcall(function()
-		return self.orderedDataStore:GetSortedAsync(false, 1):GetCurrentPage()[1]
-	end)
+	local success, value = self.savingMethod:Get()
 
-	if not success then
-		self.getting = false
-		error(mostRecentKeyPage)
-	end
-
-	if mostRecentKeyPage then
-		local recentKey = mostRecentKeyPage.value
-		self:Debug("most recent key", mostRecentKeyPage)
-		self.mostRecentKey = recentKey
-		local success, value = pcall(function()
-			return self.dataStore:GetAsync(recentKey)
-		end)
-		if not success then
-			self.getting = false
-			error(value)
-		end
-		self.value = value
-	else
-		self:Debug("no recent key")
-		self.value = nil
-	end
-
-	for _, waiting in pairs(self.getQueue) do
-		self:Debug("resuming in queue", waiting)
-		waiting:Fire()
-	end
-
-	self.getQueue = {}
-	self.haveValue = true
 	self.getting = false
+	if not success then
+		error(tostring(value))
+	end
+
+	self.value = value
+
+	self:Debug("value received")
+	self.getQueue:Fire()
+
+	self.haveValue = true
 end
 
 function DataStore:_Update(dontCallOnUpdate)
@@ -233,16 +125,22 @@ function DataStore:Get(defaultValue, dontAttemptGet)
 	local backupCount = 0
 
 	if not self.haveValue then
-		while not self.haveValue and not pcall(self._GetRaw, self) do
-			if self.backupRetries then
-				backupCount = backupCount + 1
+		while not self.haveValue do
+			local success, error = pcall(self._GetRaw, self)
 
-				if backupCount >= self.backupRetries then
-					self.backup = true
-					self.haveValue = true
-					self.value = self.backupValue
-					break
+			if not success then
+				if self.backupRetries then
+					backupCount = backupCount + 1
+
+					if backupCount >= self.backupRetries then
+						self.backup = true
+						self.haveValue = true
+						self.value = self.backupValue
+						break
+					end
 				end
+
+				self:Debug("Get returned error:", error)
 			end
 		end
 
@@ -451,12 +349,12 @@ end
 **--]]
 function DataStore:Save()
 	if not self.valueUpdated then
-		warn(("Data store %s was not saved as it was not updated."):format(self.name))
+		warn(("Data store %s was not saved as it was not updated."):format(self.Name))
 		return
 	end
 
-	if game:GetService("RunService"):IsStudio() and not SaveInStudio then
-		warn(("Data store %s attempted to save in studio while SaveInStudio is false."):format(self.name))
+	if RunService:IsStudio() and not SaveInStudio then
+		warn(("Data store %s attempted to save in studio while SaveInStudio is false."):format(self.Name))
 		if not SaveInStudioObject then
 			warn("You can set the value of this by creating a BoolValue named SaveInStudio in ServerStorage.")
 		end
@@ -484,10 +382,12 @@ function DataStore:Save()
 
 		if not Verifier.warnIfInvalid(save) then return warn("Invalid data while saving") end
 
-		local key = (self.mostRecentKey or 0) + 1
-		self.dataStore:SetAsync(key, save)
-		self.orderedDataStore:SetAsync(key, key)
-		self.mostRecentKey = key
+		local success, problem = self.savingMethod:Set(save)
+
+		if not success then
+			-- TODO: Something more robust than this
+			error("save error! " .. tostring(problem))
+		end
 
 		for _, afterSave in pairs(self.afterSave) do
 			local success, err = pcall(afterSave, save, self)
@@ -497,8 +397,17 @@ function DataStore:Save()
 			end
 		end
 
-		print("saved "..self.name)
+		print("saved "..self.Name)
 	end
+end
+
+--[[**
+	<description>
+	Asynchronously saves the data to the data store.
+	</description>
+**--]]
+function DataStore:SaveAsync()
+	coroutine.wrap(DataStore.Save)(self)
 end
 
 --[[**
@@ -695,16 +604,15 @@ function DataStore2:__call(dataStoreName, player)
 	end
 
 	local dataStore = {}
-	local dataStoreKey = dataStoreName .. "/" .. player.UserId
 
-	dataStore.dataStore = DataStoreService:GetDataStore(dataStoreKey)
-	dataStore.orderedDataStore = DataStoreService:GetOrderedDataStore(dataStoreKey)
-	dataStore.name = dataStoreName
-	dataStore.player = player
+	dataStore.Name = dataStoreName
+	dataStore.UserId = player.UserId
+
 	dataStore.callbacks = {}
 	dataStore.beforeInitialGet = {}
 	dataStore.afterSave = {}
 	dataStore.bindToClose = {}
+	dataStore.savingMethod = SavingMethods.OrderedBackups.new(dataStore)
 
 	setmetatable(dataStore, DataStoreMetatable)
 
@@ -722,16 +630,17 @@ function DataStore2:__call(dataStoreName, player)
 		end
 	end)
 
-	Players.PlayerRemoving:connect(function(playerLeaving)
-		if playerLeaving == player then
-			dataStore:Save()
-			event:Fire()
-			fired = true
+	local playerLeavingConnection
+	playerLeavingConnection = player.AncestryChanged:Connect(function()
+		if player:IsDescendantOf(game) then return end
+		playerLeavingConnection:Disconnect()
+		dataStore:Save()
+		event:Fire()
+		fired = true
 
-			delay(40, function() --Give a long delay for people who haven't figured out the cache :^(
-				DataStoreCache[playerLeaving] = nil
-			end)
-		end
+		delay(40, function() --Give a long delay for people who haven't figured out the cache :^(
+			DataStoreCache[player] = nil
+		end)
 	end)
 
 	if not DataStoreCache[player] then

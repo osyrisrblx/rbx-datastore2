@@ -1,8 +1,8 @@
 {
 	"name": "@rbxts/datastore2",
-	"version": "1.0.1",
+	"version": "1.0.2",
 	"description": "a roblox-ts package of Kampfkarren's Datastore2",
-	"main": "init.lua",
+	"main": "src/init.lua",
 	"types": "index.d.ts",
 	"scripts": {},
 	"keywords": [],

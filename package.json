@@ -1,6 +1,6 @@
 {
 	"name": "@rbxts/datastore2",
-	"version": "1.0.2",
+	"version": "1.0.3",
 	"description": "a roblox-ts package of Kampfkarren's Datastore2",
 	"main": "src/init.lua",
 	"types": "index.d.ts",
@@ -9,9 +9,9 @@
 	"author": "",
 	"license": "ISC",
 	"devDependencies": {
-		"rbx-types": "^1.0.72"
+		"@rbxts/types": "^1.0.249"
 	},
 	"peerDependencies": {
-		"rbx-types": "^1.0.72"
+		"@rbxts/types": "^1.0.249"
 	}
 }

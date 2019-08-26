@@ -5,7 +5,8 @@ interface DataStore2<T> {
 	 * @param dontAttemptGet If there is no cached result, just return nil.
 	 * @return The value in the data store if there is no cached result. The cached result otherwise.
 	 */
-	Get(defaultValue?: T, dontAttemptGet?: boolean): T;
+	Get(defaultValue: T, dontAttemptGet?: boolean): T;
+	Get(defaultValue?: T, dontAttemptGet?: boolean): T | undefined;
 
 	/**
 	 * The same as :Get only it'll check to make sure all keys in the default data provided
@@ -15,7 +16,7 @@ interface DataStore2<T> {
 	 * @param defaultValue A table that will have its keys compared to that of the actual data received.
 	 * @return The value in the data store will all keys from the default value provided.
 	 */
-	GetTable(defaultValue?: object): T;
+	GetTable(defaultValue: object): T;
 
 	/**
 	 * Sets the cached result to the value provided

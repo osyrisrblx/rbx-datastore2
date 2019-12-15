@@ -14,7 +14,7 @@ function Verifier.scanValidity(tbl, passed, path)
 	passed[tbl] = true
 	local tblType
 	do
-		local key, value = next(tbl)
+		local key = next(tbl)
 		if type(key) == "number" then
 			tblType = "Array"
 		else
@@ -66,17 +66,15 @@ function Verifier.getStringPath(path)
 	return table.concat(path, ".")
 end
 
-function Verifier.warnIfInvalid(input)
+function Verifier.testValidity(input)
 	local isValid, keyPath, reason, extra = Verifier.scanValidity(input)
 	if not isValid then
 		if extra then
-			warn("Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason.." ("..tostring(extra)..")")
+			return "Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason.." ("..tostring(extra)..")"
 		else
-			warn("Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason)
+			return "Invalid at "..Verifier.getStringPath(keyPath).." because: "..reason
 		end
 	end
-
-	return isValid
 end
 
 return Verifier

@@ -27,13 +27,14 @@
 	coinStore:Get()
 --]]
 
---Required components
-local DataStoreService = game:GetService("DataStoreService")
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 
+local Constants = require(script.Constants)
+local Promise = require(script.Promise)
 local SavingMethods = require(script.SavingMethods)
+local Settings = require(script.Settings)
 local TableUtil = require(script.TableUtil)
 local Verifier = require(script.Verifier)
 
@@ -59,32 +60,19 @@ function DataStore:Debug(...)
 end
 
 function DataStore:_GetRaw()
-	if not self.getQueue then
-		self.getQueue = Instance.new("BindableEvent")
+	if self.getRawPromise then
+		return self.getRawPromise
 	end
 
-	if self.getting then
-		self:Debug("A _GetRaw is already in motion, just wait until it's done")
-		self.getQueue.Event:wait()
-		self:Debug("Aaand we're back")
-		return
-	end
+	self.getRawPromise = self.savingMethod:Get():andThen(function(value)
+		self.value = value
+		self:Debug("value received")
+		self.haveValue = true
+	end):finally(function()
+		self.getting = false
+	end)
 
-	self.getting = true
-
-	local success, value = self.savingMethod:Get()
-
-	self.getting = false
-	if not success then
-		error(tostring(value))
-	end
-
-	self.value = value
-
-	self:Debug("value received")
-	self.getQueue:Fire()
-
-	self.haveValue = true
+	return self.getRawPromise
 end
 
 function DataStore:_Update(dontCallOnUpdate)
@@ -100,23 +88,6 @@ end
 
 --Public functions
 
---[[**
-	<description>
-	Gets the result from the data store. Will yield the first time it is called.
-	</description>
-
-	<parameter name = "defaultValue">
-	The default result if there is no result in the data store.
-	</parameter>
-
-	<parameter name = "dontAttemptGet">
-	If there is no cached result, just return nil.
-	</parameter>
-
-	<returns>
-	The value in the data store if there is no cached result. The cached result otherwise.
-	</returns>
-**--]]
 function DataStore:Get(defaultValue, dontAttemptGet)
 	if dontAttemptGet then
 		return self.value
@@ -126,7 +97,7 @@ function DataStore:Get(defaultValue, dontAttemptGet)
 
 	if not self.haveValue then
 		while not self.haveValue do
-			local success, error = pcall(self._GetRaw, self)
+			local success, error = self:_GetRaw():await()
 
 			if not success then
 				if self.backupRetries then
@@ -166,137 +137,82 @@ function DataStore:Get(defaultValue, dontAttemptGet)
 	return value
 end
 
---[[**
-	<description>
-	The same as :Get only it'll check to make sure all keys in the default data provided
-	exist. If not, will pass in the default value only for that key.
-	This is recommended for tables in case you want to add new entries to the table.
-	Note this is not required for tables, it only provides an extra functionality.
-	</description>
+function DataStore:GetAsync(...)
+	local args = { ... }
+	return Promise.async(function(resolve)
+		resolve(self:Get(unpack(args)))
+	end)
+end
 
-	<parameter name = "defaultValue">
-	A table that will have its keys compared to that of the actual data received.
-	</parameter>
-
-	<returns>
-	The value in the data store will all keys from the default value provided.
-	</returns>
-**--]]
 function DataStore:GetTable(default, ...)
-	assert(default ~= nil, "You must provide a default value with :GetTable.")
-
-	local result = self:Get(default, ...)
-	local changed = false
-
-	assert(typeof(result) == "table", ":GetTable was used when the value in the data store isn't a table.")
-
-	for defaultKey, defaultValue in pairs(default) do
-		if result[defaultKey] == nil then
-			result[defaultKey] = defaultValue
-			changed = true
-		end
+	local success, result = self:GetTableAsync(default, ...):await()
+	if not success then
+		error(result)
 	end
-
-	if changed then
-		self:Set(result)
-	end
-
 	return result
 end
 
---[[**
-	<description>
-	Sets the cached result to the value provided
-	</description>
+function DataStore:GetTableAsync(default, ...)
+	assert(default ~= nil, "You must provide a default value.")
 
-	<parameter name = "value">
-	The value
-	</parameter>
-**--]]
+	return self:GetAsync(default, ...):andThen(function(result)
+		return Promise.async(function(resolve)
+			local changed = false
+			assert(
+				typeof(result) == "table",
+				":GetTable/:GetTableAsync was used when the value in the data store isn't a table."
+			)
+
+			for defaultKey, defaultValue in pairs(default) do
+				if result[defaultKey] == nil then
+					result[defaultKey] = defaultValue
+					changed = true
+				end
+			end
+
+			if changed then
+				self:Set(result)
+			end
+
+			resolve(result)
+		end)
+	end)
+end
+
 function DataStore:Set(value, _dontCallOnUpdate)
 	self.value = clone(value)
 	self:_Update(_dontCallOnUpdate)
 end
 
---[[**
-	<description>
-	Calls the function provided and sets the cached result.
-	</description>
-
-	<parameter name = "updateFunc">
-	The function
-	</parameter>
-**--]]
 function DataStore:Update(updateFunc)
 	self.value = updateFunc(self.value)
 	self:_Update()
 end
 
---[[**
-	<description>
-	Increment the cached result by value.
-	</description>
-
-	<parameter name = "value">
-	The value to increment by.
-	</parameter>
-
-	<parameter name = "defaultValue">
-	If there is no cached result, set it to this before incrementing.
-	</parameter>
-**--]]
 function DataStore:Increment(value, defaultValue)
 	self:Set(self:Get(defaultValue) + value)
 end
 
---[[**
-	<description>
-	Takes a function to be called whenever the cached result updates.
-	</description>
+function DataStore:IncrementAsync(add, defaultValue)
+	self:GetAsync(defaultValue):andThen(function(value)
+		return Promise.promisify(function()
+			self:Set(value + add)
+		end)()
+	end)
+end
 
-	<parameter name = "callback">
-	The function to call.
-	</parameter>
-**--]]
 function DataStore:OnUpdate(callback)
 	table.insert(self.callbacks, callback)
 end
 
---[[**
-	<description>
-	Takes a function to be called when :Get() is first called and there is a value in the data store. This function must return a value to set to. Used for deserializing.
-	</description>
-
-	<parameter name = "modifier">
-	The modifier function.
-	</parameter>
-**--]]
 function DataStore:BeforeInitialGet(modifier)
 	table.insert(self.beforeInitialGet, modifier)
 end
 
---[[**
-	<description>
-	Takes a function to be called before :Save(). This function must return a value that will be saved in the data store. Used for serializing.
-	</description>
-
-	<parameter name = "modifier">
-	The modifier function.
-	</parameter>
-**--]]
 function DataStore:BeforeSave(modifier)
 	self.beforeSave = modifier
 end
 
---[[**
-	<description>
-	Takes a function to be called after :Save().
-	</description>
-
-	<parameter name = "callback">
-	The callback function.
-	</parameter>
-**--]]
 function DataStore:AfterSave(callback)
 	table.insert(self.afterSave, callback)
 end
@@ -348,56 +264,12 @@ end
 	</description>
 **--]]
 function DataStore:Save()
-	if not self.valueUpdated then
-		warn(("Data store %s was not saved as it was not updated."):format(self.Name))
-		return
-	end
+	local success, result = self:SaveAsync():await()
 
-	if RunService:IsStudio() and not SaveInStudio then
-		warn(("Data store %s attempted to save in studio while SaveInStudio is false."):format(self.Name))
-		if not SaveInStudioObject then
-			warn("You can set the value of this by creating a BoolValue named SaveInStudio in ServerStorage.")
-		end
-		return
-	end
-
-	if self.backup then
-		warn("This data store is a backup store, and thus will not be saved.")
-		return
-	end
-
-	if self.value ~= nil then
-		local save = clone(self.value)
-
-		if self.beforeSave then
-			local success, newSave = pcall(self.beforeSave, save, self)
-
-			if success then
-				save = newSave
-			else
-				warn("Error on BeforeSave: "..newSave)
-				return
-			end
-		end
-
-		if not Verifier.warnIfInvalid(save) then return warn("Invalid data while saving") end
-
-		local success, problem = self.savingMethod:Set(save)
-
-		if not success then
-			-- TODO: Something more robust than this
-			error("save error! " .. tostring(problem))
-		end
-
-		for _, afterSave in pairs(self.afterSave) do
-			local success, err = pcall(afterSave, save, self)
-
-			if not success then
-				warn("Error on AfterSave: "..err)
-			end
-		end
-
-		print("saved "..self.Name)
+	if success then
+		print("saved " .. self.Name)
+	else
+		error(result)
 	end
 end
 
@@ -407,52 +279,75 @@ end
 	</description>
 **--]]
 function DataStore:SaveAsync()
-	coroutine.wrap(DataStore.Save)(self)
+	return Promise.async(function(resolve, reject)
+		if not self.valueUpdated then
+			warn(("Data store %s was not saved as it was not updated."):format(self.Name))
+			resolve(false)
+			return
+		end
+
+		if RunService:IsStudio() and not SaveInStudio then
+			warn(("Data store %s attempted to save in studio while SaveInStudio is false."):format(self.Name))
+			if not SaveInStudioObject then
+				warn("You can set the value of this by creating a BoolValue named SaveInStudio in ServerStorage.")
+			end
+			resolve(false)
+			return
+		end
+
+		if self.backup then
+			warn("This data store is a backup store, and thus will not be saved.")
+			resolve(false)
+			return
+		end
+
+		if self.value ~= nil then
+			local save = clone(self.value)
+
+			if self.beforeSave then
+				local success, result = pcall(self.beforeSave, save, self)
+
+				if success then
+					save = result
+				else
+					reject(result, Constants.SaveFailure.BeforeSaveError)
+					return
+				end
+			end
+
+			local problem = Verifier.testValidity(save)
+			if problem then
+				reject(problem, Constants.SaveFailure.InvalidData)
+				return
+			end
+
+			return self.savingMethod:Set(save):andThen(function()
+				resolve(true, save)
+			end)
+		end
+	end):andThen(function(saved, save)
+		if saved then
+			for _, afterSave in pairs(self.afterSave) do
+				local success, err = pcall(afterSave, save, self)
+
+				if not success then
+					warn("Error on AfterSave: "..err)
+				end
+			end
+
+			self.valueUpdated = false
+		end
+	end)
 end
 
---[[**
-	<description>
-	Add a function to be called before the game closes. Fired with the player and value of the data store.
-	</description>
-
-	<parameter name = "callback">
-	The callback function.
-	</parameter>
-**--]]
 function DataStore:BindToClose(callback)
 	table.insert(self.bindToClose, callback)
 end
 
---[[**
-	<description>
-	Gets the value of the cached result indexed by key. Does not attempt to get the current value in the data store.
-	</description>
-
-	<parameter name = "key">
-	The key you're indexing by.
-	</parameter>
-
-	<returns>
-	The value indexed.
-	</returns>
-**--]]
 function DataStore:GetKeyValue(key)
 	return (self.value or {})[key]
 end
 
---[[**
-	<description>
-	Sets the value of the result in the database with the key and the new value. Attempts to get the value from the data store. Does not call functions fired on update.
-	</description>
-
-	<parameter name = "key">
-	The key to set.
-	</parameter>
-
-	<parameter name = "newValue">
-	The value to set.
-	</parameter>
-**--]]
 function DataStore:SetKeyValue(key, newValue)
 	if not self.value then
 		self.value = self:Get({})
@@ -489,7 +384,7 @@ do
 		self.combinedInitialGot = true
 		tableResult[self.combinedName] = clone(tableValue)
 		self.combinedStore:Set(tableResult, true)
-		return tableValue
+		return clone(tableValue)
 	end
 
 	function CombinedDataStore:Set(value, dontCallOnUpdate)
@@ -502,6 +397,10 @@ do
 	function CombinedDataStore:Update(updateFunc)
 		self:Set(updateFunc(self:Get()))
 		self:_Update()
+	end
+
+	function CombinedDataStore:Save()
+		self.combinedStore:Save()
 	end
 
 	function CombinedDataStore:OnUpdate(callback)
@@ -562,8 +461,34 @@ function DataStore2.ClearCache()
 	DataStoreCache = {}
 end
 
-function DataStore2:__call(dataStoreName, player)
-	assert(typeof(dataStoreName) == "string" and typeof(player) == "Instance", ("DataStore2() API call expected {string dataStoreName, Instance player}, got {%s, %s}"):format(typeof(dataStoreName), typeof(player)))
+function DataStore2.SaveAll(player)
+	if DataStoreCache[player] then
+		for _, dataStore in pairs(DataStoreCache[player]) do
+			if dataStore.combinedStore == nil then
+				dataStore:Save()
+			end
+		end
+	end
+end
+
+function DataStore2.PatchGlobalSettings(patch)
+	for key, value in pairs(patch) do
+		assert(Settings[key] ~= nil, "No such key exists: " .. key)
+		-- TODO: Implement type checking with this when osyris' t is in
+		Settings[key] = value
+	end
+end
+
+function DataStore2.__call(_, dataStoreName, player)
+	assert(
+		typeof(dataStoreName) == "string" and typeof(player) == "Instance",
+		("DataStore2() API call expected {string dataStoreName, Instance player}, got {%s, %s}")
+		:format(
+			typeof(dataStoreName),
+			typeof(player)
+		)
+	)
+
 	if DataStoreCache[player] and DataStoreCache[player][dataStoreName] then
 		return DataStoreCache[player][dataStoreName]
 	elseif combinedDataStoreInfo[dataStoreName] then
@@ -588,9 +513,9 @@ function DataStore2:__call(dataStoreName, player)
 
 		local combinedStore = setmetatable({
 			combinedName = dataStoreName,
-			combinedStore = dataStore
+			combinedStore = dataStore,
 		}, {
-			__index = function(self, key)
+			__index = function(_, key)
 				return CombinedDataStore[key] or dataStore[key]
 			end
 		})
@@ -612,7 +537,7 @@ function DataStore2:__call(dataStoreName, player)
 	dataStore.beforeInitialGet = {}
 	dataStore.afterSave = {}
 	dataStore.bindToClose = {}
-	dataStore.savingMethod = SavingMethods.OrderedBackups.new(dataStore)
+	dataStore.savingMethod = SavingMethods[Settings.SavingMethod].new(dataStore)
 
 	setmetatable(dataStore, DataStoreMetatable)
 
@@ -620,6 +545,10 @@ function DataStore2:__call(dataStoreName, player)
 
 	game:BindToClose(function()
 		if not fired then
+			spawn(function()
+				player.Parent = nil -- Forces AncestryChanged to fire and save the data
+			end)
+
 			event.Event:wait()
 		end
 
@@ -634,9 +563,15 @@ function DataStore2:__call(dataStoreName, player)
 	playerLeavingConnection = player.AncestryChanged:Connect(function()
 		if player:IsDescendantOf(game) then return end
 		playerLeavingConnection:Disconnect()
-		dataStore:Save()
-		event:Fire()
-		fired = true
+		dataStore:SaveAsync():andThen(function()
+			print("player left, saved " .. dataStoreName)
+		end):catch(function(error)
+			-- TODO: Something more elegant
+			warn("error when player left! " .. error)
+		end):finally(function()
+			event:Fire()
+			fired = true
+		end)
 
 		delay(40, function() --Give a long delay for people who haven't figured out the cache :^(
 			DataStoreCache[player] = nil
@@ -651,5 +586,7 @@ function DataStore2:__call(dataStoreName, player)
 
 	return dataStore
 end
+
+DataStore2.Constants = Constants
 
 return setmetatable(DataStore2, DataStore2)

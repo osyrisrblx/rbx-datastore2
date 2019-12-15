@@ -98,11 +98,6 @@ interface DataStore2<T> {
 	GetAsync(defaultValue?: T, dontAttemptGet?: boolean): Promise<T>
 
 	/**
-	 * Same as `.Save()`, but will instead return a Promise instead of yielding. On rejection, will return the error that caused the reject. On resolution, will return whether the data *actually* saved. This is false in the case of being in studio, data not being updated or the data store being a backup store.
-	 */
-	SaveAsync(): Promise<[boolean, T]>;
-
-	/**
 	 * 
 	 * @param defaultTable The default value to use
 	 */

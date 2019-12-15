@@ -1,120 +1,156 @@
 interface DataStore2<T> {
 	/**
-	 * Gets the result from the data store. Will yield the first time it is called.
-	 * @param defaultValue The default result if there is no result in the data store.
-	 * @param dontAttemptGet If there is no cached result, just return nil.
+	 * Will return the value cached in the data store, if it exists. If it does not exist, will then attempt to get the value from Roblox data stores. This function will only yield if there is no value in the data store.
+	 * .Get() returns a deep copy of whatever the data is, thus if the value is a table, then dataStore.Get() ~= dataStore.Get(). This may be lifted in the future for "pure" data stores.
+	 * @param defaultValue The value will be used if the player has no data.
+	 * @param dontAttemptGet When dontAttemptGet is true, will return the cached value and will not attempt to get it from Roblox if it does not exist. Ignores the value of defaultValue.
 	 * @return The value in the data store if there is no cached result. The cached result otherwise.
 	 */
 	Get(defaultValue: T, dontAttemptGet?: boolean): T;
 	Get(defaultValue?: T, dontAttemptGet?: boolean): T | undefined;
 
 	/**
-	 * The same as :Get only it'll check to make sure all keys in the default data provided
+	 * Will set the cached value in the data store to newValue. Does not make any data store calls, and so will never yield.
+	 * @param newValue The value to set in the DataStore
+	 */
+	Set(newValue: T): void;
+
+	/**
+	 * Saves the data in the current data store to Roblox. This function yields.
+	 * Currently, Save() does not attempt to retry if it fails the first time. Save() can error if data stores are down or your data is invalid.
+	 */
+	Save(): void;
+
+	/**
+	 * Will set the data store value to the return of updateCallback when passed with the current value.
+	 * You may see people talk about how UpdateAsync is more reliable than SetAsync in normal Roblox data stores. In DataStore2, this doesn't matter since neither actually call Roblox data store methods, so use .Set when you don't need the old value.
+	 * Update currently does not attempt to get the value from the Roblox data store. This will be fixed in a [future update](https://github.com/Kampfkarren/Roblox/issues/57).
+	 * @param updateCallback The function
+	 */
+	Update(updateCallback: (oldValue: T) => T): void;
+
+	/**
+	 * The same as .Get only it'll check to make sure all keys in the default data provided
 	 * exist. If not, will pass in the default value only for that key.
 	 * This is recommended for tables in case you want to add new entries to the table.
-	 * Note this is not required for tables, it only provides an extra functionality.
+	 * Note this is not necessary to use tables with DataStore2. You can save/retrieve tables just like any other piece of data.
 	 * @param defaultValue A table that will have its keys compared to that of the actual data received.
 	 * @return The value in the data store will all keys from the default value provided.
 	 */
 	GetTable(defaultValue: object): T;
 
 	/**
-	 * Sets the cached result to the value provided
-	 * @param value The value
-	 */
-	Set(value: T): void;
-
-	/**
-	 * Calls the function provided and sets the cached result.
-	 * @param updateFunc The function
-	 */
-	Update(updateFunc: (oldValue: T) => T): void;
-
-	/**
-	 * Increment the cached result by value.
-	 * @param value The value to increment by.
+	 * Will increment the current value (cached or from Roblox data stores) with the value provided in add. If a value does not exist, will use defaultValue, then add.
+	 * @param add The value to increment by.
 	 * @param defaultValue If there is no cached result, set it to this before incrementing.
 	 */
-	Increment(value: T, defaultValue?: T): void;
+	Increment(add: number, defaultValue?: number): void;
 
 	/**
-	 * Takes a function to be called whenever the cached result updates.
+	 * Will call the callback provided whenever the cached value is updated. Is not called on the initial get.
 	 * @param callback The function to call.
 	 */
 	OnUpdate(callback: (value: T) => void): void;
+	
+	/**
+	 * Will set the number of retries for `.Get()` to attempt to retrieve a Roblox data store value before giving up and marking the data store as a backup. If `alternativeDefaultValue` is provided, then that value will be given to `.Get()`, otherwise normal rules apply while assuming the player actually doesn't have any data. Learn more on the [backups page](https://kampfkarren.github.io/Roblox/advanced/backups/).
+	 * @param retries Number of retries before the backup will be used.
+	 * @param alternativeDefaultValue The value to return to `.Get()` in the case of a failure.
+	 * You can keep this blank and the default value you provided with `.Get()` will be used instead.
+	 */
+	SetBackup(retries: number, alternativeDefaultValue?: T): void;
 
 	/**
-	 * Takes a function to be called when :Get() is first called and there is a value in the data store.
-	 * This function must return a value to set to. Used for deserializing.
+	 * Returns whether the current data store is a backup data store or not. Learn more on the [backups page](https://kampfkarren.github.io/Roblox/advanced/backups/).
+	 * Tip: you don't need to know if a data store is a backup when saving. Backup data stores will never save.
+	 */
+	IsBackup(): boolean;
+
+	/**
+	 * Unmarks the current data store as a backup data store. The next time `.Get()` is called, it'll attempt to get the value inside Roblox data stores again. Learn more on the [backups page](https://kampfkarren.github.io/Roblox/advanced/backups/).
+	 */
+	ClearBackup(): void;
+
+	/**
+	 * Called after a value is received from Roblox data stores. The value returned is what `.Get()` will receive. Primarily used for deserialization. Learn more on the [serialization page](https://kampfkarren.github.io/Roblox/advanced/serde/).
+	 * BeforeInitialGet is known to cause issues with combined data stores. If you can reproduce these issues, please [file an issue on GitHub](https://github.com/Kampfkarren/Roblox/issues)!
 	 * @param modifier The modifier function.
 	 */
 	BeforeInitialGet<U>(modifier: (value: U) => T): void;
 
 	/**
-	 * Takes a function to be called before :Save().
-	 * This function must return a value that will be saved in the data store. Used for serializing.
+	 * Called before a value is saved into Roblox data stores. The value returned is what will be saved. Primarily used for serialization. Learn more on the [serialization page](https://kampfkarren.github.io/Roblox/advanced/serde/).
 	 * @param modifier The modifier function.
 	 */
-	BeforeSave<U>(modifier: (value: T) => U): void;
+	BeforeSave<U>(modifier: (dataValue: T) => U): void;
 
 	/**
-	 * Takes a function to be called after :Save().
+	 * Will call the callback after data is successfully saved into Roblox data stores.
 	 * @param callback The callback function.
 	 */
-	AfterSave(callback: (value: T) => void): void;
+	AfterSave(callback: (savedValue: T) => void): void;
 
 	/**
-	 * Adds a backup to the data store if :Get() fails a specified amount of times.
-	 * Will return the value provided (if the value is nil, then the default value of :Get() will be returned)
-	 * and mark the data store as a backup store, and attempts to :Save() will not truly save.
-	 * @param retries Number of retries before the backup will be used.
-	 * @param value The value to return to :Get() in the case of a failure.
-	 * You can keep this blank and the default value you provided with :Get() will be used instead.
+	 * Same as `.Get()`, but will instead return a Promise instead of yielding.
+	 * @param defaultValue The value will be used if the player has no data.
+	 * @param dontAttemptGet When dontAttemptGet is true, will return the cached value and will not attempt to get it from Roblox if it does not exist. Ignores the value of defaultValue.
 	 */
-	SetBackup(retries: number, value?: T): void;
+	GetAsync(defaultValue?: T, dontAttemptGet?: boolean): Promise<T>
 
 	/**
-	 * Unmark the data store as a backup data store and tell :Get() and reset values to nil.
+	 * 
+	 * @param defaultTable The default value to use
 	 */
-	ClearBackup(): void;
+	GetTableAsync(defaultTable: T): Promise<T>
 
 	/**
-	 * Whether or not the data store is a backup data store and thus won't save during :Save() or call :AfterSave().
+	 * Same as `.Increment()`, but will instead return a Promise instead of yielding.
+	 * @param add The value to increment by.
+	 * @param defaultValue If there is no cached result, set it to this before incrementing.
 	 */
-	IsBackup(): boolean;
+	IncrementAsync(add: number, defaultValue?: number): Promise<void>
+}
 
+interface iPatchGlobalSettings {
 	/**
-	 * Saves the data to the data store. Called when a player leaves.
+	 * Controls how the data should be saved. Read more in the [saving methods](https://kampfkarren.github.io/Roblox/advanced/saving_methods) page.
+	 * @default OrderedBackups
 	 */
-	Save(): void;
-
-	/**
-	 * Asynchronously saves the data to the data store.
-	 */
-	SaveAsync(): void;
-
-	/**
-	 * Add a function to be called before the game closes. Fired with the player and value of the data store.
-	 * @param callback The callback function.
-	 */
-	BindToClose(callback: (player: Player, value: T) => void): void;
+	SavingMethod?: "Standard" | "OrderedBackups"
 }
 
 interface module {
 	/**
-	 * This is what the module returns when you require it. You usually use this on PlayerAdded.
-	 * Note that the data store name will not be what the name of the data store (because of how the saving method works).
+	 * Will create a DataStore instance for the player with that specific name. If one already exists, will retrieve that one.
+	 * Do not use the master key that you use in combined data stores, this behavior is not defined!
+	 * @param dataStoreName The name of the DataStore2
+	 * @param player The player to create the DataStore2 for
 	 */
 	<T>(dataStoreName: string, player: Player): DataStore2<T>;
 
 	/**
-	 * Run this once to combine all keys provided into one "main key".
-	 * Internally, this means that data will be stored in a table with the key mainKey.
-	 * This is used to get around the 2-DataStore2 reliability caveat.
-	 * @param mainKey The key that will be used to house the table.
-	 * @param otherKeys All the keys to combine under one table.
+	 * Combines all the keys under keysToCombine under the masterKey. Internally, will save all data under those keys into the masterKey as one large dictionary. You can learn more about combined data stores and why you should use them in the [gotchas](https://kampfkarren.github.io/Roblox/guide/gotchas/) page. Can be called multiple times without overriding previously combined keys.
+	 * You should never use data stores without combining them or at the very least, replicating the behavior by creating one large dictionary yourself! Combined data stores will soon be the default way to use DataStore2.
+	 * @param masterKey The key that will be used to house the table.
+	 * @param keysToCombine All the keys to combine under one table.
 	 */
-	Combine: (mainKey: string, ...otherKeys: Array<string>) => void;
+	Combine: (masterKey: string, ...keysToCombine: Array<string>) => void;
+
+	/**
+	 * Clears the DataStore2 cache, so using DataStore2 again will give you fresh data stores. This is mostly for internal use or for unit testing.
+	 */
+	ClearCache: () => void;
+
+	/**
+	 * Will override the global settings by patching it with ones you provide. This means if you do not specify a setting, it will not be changed.
+	 * @param settings The settings to patch into the global settings
+	 */
+	PatchGlobalSettings: (settings: iPatchGlobalSettings) => void;
+
+	/**
+	 * Will save all the data stores of the player. This is the recommended way to save combined data stores.
+	 */
+	SaveAll: (player: Player) => void
 }
 
 declare const module: module;

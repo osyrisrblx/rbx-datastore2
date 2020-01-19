@@ -51,7 +51,7 @@ interface DataStore2<T> {
 	 * @param callback The function to call.
 	 */
 	OnUpdate(callback: (value: T) => void): void;
-	
+
 	/**
 	 * Will set the number of retries for `.Get()` to attempt to retrieve a Roblox data store value before giving up and marking the data store as a backup. If `alternativeDefaultValue` is provided, then that value will be given to `.Get()`, otherwise normal rules apply while assuming the player actually doesn't have any data. Learn more on the [backups page](https://kampfkarren.github.io/Roblox/advanced/backups/).
 	 * @param retries Number of retries before the backup will be used.
@@ -98,7 +98,7 @@ interface DataStore2<T> {
 	GetAsync(defaultValue?: T, dontAttemptGet?: boolean): Promise<T>
 
 	/**
-	 * 
+	 *
 	 * @param defaultTable The default value to use
 	 */
 	GetTableAsync(defaultTable: T): Promise<T>
@@ -111,7 +111,7 @@ interface DataStore2<T> {
 	IncrementAsync(add: number, defaultValue?: number): Promise<void>
 }
 
-interface iPatchGlobalSettings {
+interface IPatchGlobalSettings {
 	/**
 	 * Controls how the data should be saved. Read more in the [saving methods](https://kampfkarren.github.io/Roblox/advanced/saving_methods) page.
 	 * @default OrderedBackups
@@ -119,7 +119,7 @@ interface iPatchGlobalSettings {
 	SavingMethod?: "Standard" | "OrderedBackups"
 }
 
-interface module {
+interface DataStore2Constructor {
 	/**
 	 * Will create a DataStore instance for the player with that specific name. If one already exists, will retrieve that one.
 	 * Do not use the master key that you use in combined data stores, this behavior is not defined!
@@ -145,7 +145,7 @@ interface module {
 	 * Will override the global settings by patching it with ones you provide. This means if you do not specify a setting, it will not be changed.
 	 * @param settings The settings to patch into the global settings
 	 */
-	PatchGlobalSettings: (settings: iPatchGlobalSettings) => void;
+	PatchGlobalSettings: (settings: IPatchGlobalSettings) => void;
 
 	/**
 	 * Will save all the data stores of the player. This is the recommended way to save combined data stores.
@@ -153,5 +153,5 @@ interface module {
 	SaveAll: (player: Player) => void
 }
 
-declare const module: module;
-export = module;
+declare const DataStore2: DataStore2Constructor;
+export = DataStore2;

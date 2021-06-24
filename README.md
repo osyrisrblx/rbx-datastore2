@@ -7,4 +7,4 @@ a roblox-ts package of Kampfkarren's Datastore2
 ## Contribution
 The `package.json` file version refers to the current DataStore2 version the package was updated to.
 Contributions may be accepted, but please test your code!
-An example of test code can be found in CONTRIBUTING.md
+An example of test code can be found in [CONTRIBUTING.md](./CONTRIBUTING.md)

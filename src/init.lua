@@ -1,6 +1,5 @@
 --[[
-	DataStore2: A wrapper for data stores that caches, saves player's data, and uses berezaa's method of saving data.
-	Use require(1936396537) to have an updated version of DataStore2.
+	DataStore2: A wrapper for data stores that caches and saves player's data.
 
 	DataStore2(dataStoreName, player) - Returns a DataStore2 DataStore
 
@@ -27,11 +26,11 @@
 	coinStore:Get()
 --]]
 
-local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local ServerStorage = game:GetService("ServerStorage")
 
 local Constants = require(script.Constants)
+local IsPlayer = require(script.IsPlayer)
 local Promise = require(script.Promise)
 local SavingMethods = require(script.SavingMethods)
 local Settings = require(script.Settings)
@@ -55,7 +54,7 @@ local DataStore = {}
 --Internal functions
 function DataStore:Debug(...)
 	if self.debug then
-		print(...)
+		print("[DataStore2.Debug]", ...)
 	end
 end
 
@@ -68,8 +67,11 @@ function DataStore:_GetRaw()
 		self.value = value
 		self:Debug("value received")
 		self.haveValue = true
-	end):finally(function()
 		self.getting = false
+	end):catch(function(reason)
+		self.getting = false
+		self.getRawPromise = nil
+		return Promise.reject(reason)
 	end)
 
 	return self.getRawPromise
@@ -77,7 +79,7 @@ end
 
 function DataStore:_Update(dontCallOnUpdate)
 	if not dontCallOnUpdate then
-		for _,callback in pairs(self.callbacks) do
+		for _, callback in ipairs(self.callbacks) do
 			callback(self.value, self)
 		end
 	end
@@ -116,7 +118,7 @@ function DataStore:Get(defaultValue, dontAttemptGet)
 		end
 
 		if self.value ~= nil then
-			for _,modifier in pairs(self.beforeInitialGet) do
+			for _, modifier in ipairs(self.beforeInitialGet) do
 				self.value = modifier(self.value, self)
 			end
 		end
@@ -138,10 +140,9 @@ function DataStore:Get(defaultValue, dontAttemptGet)
 end
 
 function DataStore:GetAsync(...)
-	local args = { ... }
-	return Promise.async(function(resolve)
-		resolve(self:Get(unpack(args)))
-	end)
+	return Promise.promisify(function(...)
+		return self:Get(...)
+	end)(...)
 end
 
 function DataStore:GetTable(default, ...)
@@ -156,26 +157,24 @@ function DataStore:GetTableAsync(default, ...)
 	assert(default ~= nil, "You must provide a default value.")
 
 	return self:GetAsync(default, ...):andThen(function(result)
-		return Promise.async(function(resolve)
-			local changed = false
-			assert(
-				typeof(result) == "table",
-				":GetTable/:GetTableAsync was used when the value in the data store isn't a table."
-			)
+		local changed = false
+		assert(
+			typeof(result) == "table",
+			":GetTable/:GetTableAsync was used when the value in the data store isn't a table."
+		)
 
-			for defaultKey, defaultValue in pairs(default) do
-				if result[defaultKey] == nil then
-					result[defaultKey] = defaultValue
-					changed = true
-				end
+		for defaultKey, defaultValue in pairs(default) do
+			if result[defaultKey] == nil then
+				result[defaultKey] = defaultValue
+				changed = true
 			end
+		end
 
-			if changed then
-				self:Set(result)
-			end
+		if changed then
+			self:Set(result)
+		end
 
-			resolve(result)
-		end)
+		return result
 	end)
 end
 
@@ -194,7 +193,7 @@ function DataStore:Increment(value, defaultValue)
 end
 
 function DataStore:IncrementAsync(add, defaultValue)
-	self:GetAsync(defaultValue):andThen(function(value)
+	return self:GetAsync(defaultValue):andThen(function(value)
 		return Promise.promisify(function()
 			self:Set(value + add)
 		end)()
@@ -247,6 +246,7 @@ function DataStore:ClearBackup()
 	self.backup = nil
 	self.haveValue = false
 	self.value = nil
+	self.getRawPromise = nil
 end
 
 --[[**
@@ -267,7 +267,7 @@ function DataStore:Save()
 	local success, result = self:SaveAsync():await()
 
 	if success then
-		print("saved " .. self.Name)
+		print("saved", self.Name)
 	else
 		error(result)
 	end
@@ -327,11 +327,11 @@ function DataStore:SaveAsync()
 		end
 	end):andThen(function(saved, save)
 		if saved then
-			for _, afterSave in pairs(self.afterSave) do
+			for _, afterSave in ipairs(self.afterSave) do
 				local success, err = pcall(afterSave, save, self)
 
 				if not success then
-					warn("Error on AfterSave: "..err)
+					warn("Error on AfterSave:", err)
 				end
 			end
 
@@ -388,15 +388,15 @@ do
 	end
 
 	function CombinedDataStore:Set(value, dontCallOnUpdate)
-		local tableResult = self.combinedStore:GetTable({})
-		tableResult[self.combinedName] = value
-		self.combinedStore:Set(tableResult, dontCallOnUpdate)
-		self:_Update(dontCallOnUpdate)
+		return self.combinedStore:GetAsync({}):andThen(function(tableResult)
+			tableResult[self.combinedName] = value
+			self.combinedStore:Set(tableResult, dontCallOnUpdate)
+			self:_Update(dontCallOnUpdate)
+		end)
 	end
 
 	function CombinedDataStore:Update(updateFunc)
 		self:Set(updateFunc(self:Get()))
-		self:_Update()
 	end
 
 	function CombinedDataStore:Save()
@@ -405,15 +405,15 @@ do
 
 	function CombinedDataStore:OnUpdate(callback)
 		if not self.onUpdateCallbacks then
-			self.onUpdateCallbacks = { callback }
+			self.onUpdateCallbacks = {callback}
 		else
-			self.onUpdateCallbacks[#self.onUpdateCallbacks + 1] = callback
+			table.insert(self.onUpdateCallbacks, callback)
 		end
 	end
 
 	function CombinedDataStore:_Update(dontCallOnUpdate)
 		if not dontCallOnUpdate then
-			for _, callback in pairs(self.onUpdateCallbacks or {}) do
+			for _, callback in ipairs(self.onUpdateCallbacks or {}) do
 				callback(self:Get(), self)
 			end
 		end
@@ -452,7 +452,7 @@ local combinedDataStoreInfo = {}
 	</parameter>
 **--]]
 function DataStore2.Combine(mainKey, ...)
-	for _, name in pairs({...}) do
+	for _, name in ipairs({...}) do
 		combinedDataStoreInfo[name] = mainKey
 	end
 end
@@ -471,6 +471,8 @@ function DataStore2.SaveAll(player)
 	end
 end
 
+DataStore2.SaveAllAsync = Promise.promisify(DataStore2.SaveAll)
+
 function DataStore2.PatchGlobalSettings(patch)
 	for key, value in pairs(patch) do
 		assert(Settings[key] ~= nil, "No such key exists: " .. key)
@@ -481,8 +483,8 @@ end
 
 function DataStore2.__call(_, dataStoreName, player)
 	assert(
-		typeof(dataStoreName) == "string" and typeof(player) == "Instance",
-		("DataStore2() API call expected {string dataStoreName, Instance player}, got {%s, %s}")
+		typeof(dataStoreName) == "string" and IsPlayer.Check(player),
+		("DataStore2() API call expected {string dataStoreName, Player player}, got {%s, %s}")
 		:format(
 			typeof(dataStoreName),
 			typeof(player)
@@ -517,7 +519,7 @@ function DataStore2.__call(_, dataStoreName, player)
 		}, {
 			__index = function(_, key)
 				return CombinedDataStore[key] or dataStore[key]
-			end
+			end,
 		})
 
 		if not DataStoreCache[player] then
@@ -528,53 +530,72 @@ function DataStore2.__call(_, dataStoreName, player)
 		return combinedStore
 	end
 
-	local dataStore = {}
+	local dataStore = {
+		Name = dataStoreName,
+		UserId = player.UserId,
+		callbacks = {},
+		beforeInitialGet = {},
+		afterSave = {},
+		bindToClose = {},
+	}
 
-	dataStore.Name = dataStoreName
-	dataStore.UserId = player.UserId
-
-	dataStore.callbacks = {}
-	dataStore.beforeInitialGet = {}
-	dataStore.afterSave = {}
-	dataStore.bindToClose = {}
 	dataStore.savingMethod = SavingMethods[Settings.SavingMethod].new(dataStore)
 
 	setmetatable(dataStore, DataStoreMetatable)
 
-	local event, fired = Instance.new("BindableEvent"), false
+	local saveFinishedEvent, isSaveFinished = Instance.new("BindableEvent"), false
+	local bindToCloseEvent = Instance.new("BindableEvent")
 
-	game:BindToClose(function()
-		if not fired then
-			spawn(function()
-				player.Parent = nil -- Forces AncestryChanged to fire and save the data
+	local bindToCloseCallback = function()
+		if not isSaveFinished then
+			-- Defer to avoid a race between connecting and firing "saveFinishedEvent"
+			Promise.defer(function()
+				bindToCloseEvent:Fire() -- Resolves the Promise.race to save the data
 			end)
 
-			event.Event:wait()
+			saveFinishedEvent.Event:Wait()
 		end
 
 		local value = dataStore:Get(nil, true)
 
-		for _, bindToClose in pairs(dataStore.bindToClose) do
+		for _, bindToClose in ipairs(dataStore.bindToClose) do
 			bindToClose(player, value)
 		end
-	end)
+	end
 
-	local playerLeavingConnection
-	playerLeavingConnection = player.AncestryChanged:Connect(function()
-		if player:IsDescendantOf(game) then return end
-		playerLeavingConnection:Disconnect()
+	local success, errorMessage = pcall(function()
+		game:BindToClose(function()
+			if bindToCloseCallback == nil then
+				return
+			end
+	
+			bindToCloseCallback()
+		end)
+	end)
+	if not success then
+		warn("DataStore2 could not BindToClose", errorMessage)
+	end
+
+	Promise.race({
+		Promise.fromEvent(bindToCloseEvent.Event),
+		Promise.fromEvent(player.AncestryChanged, function()
+			return not player:IsDescendantOf(game)
+		end),
+	}):andThen(function()
 		dataStore:SaveAsync():andThen(function()
-			print("player left, saved " .. dataStoreName)
+			print("player left, saved", dataStoreName)
 		end):catch(function(error)
 			-- TODO: Something more elegant
-			warn("error when player left! " .. error)
+			warn("error when player left!", error)
 		end):finally(function()
-			event:Fire()
-			fired = true
+			isSaveFinished = true
+			saveFinishedEvent:Fire()
 		end)
 
-		delay(40, function() --Give a long delay for people who haven't figured out the cache :^(
+		--Give a long delay for people who haven't figured out the cache :^(
+		return Promise.delay(40):andThen(function() 
 			DataStoreCache[player] = nil
+			bindToCloseCallback = nil
 		end)
 	end)
 

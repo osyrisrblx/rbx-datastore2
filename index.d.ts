@@ -151,6 +151,11 @@ interface DataStore2Constructor {
 	 * Will save all the data stores of the player. This is the recommended way to save combined data stores.
 	 */
 	SaveAll: (player: Player) => void
+
+	/**
+	 * Will save all the data stores of the player async. This is the recommended way to save combined data stores.
+	 */
+	 SaveAllAsync: (player: Player) => Promise<void>
 }
 
 declare const DataStore2: DataStore2Constructor;

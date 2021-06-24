@@ -78,5 +78,6 @@ Players.PlayerAdded.Connect(async player => {
 		.then(() => print('Saved!'));
 
 	DataStore2.SaveAll(player);
+    DataStore2.SaveAllAsync(player);
 })
 ```
